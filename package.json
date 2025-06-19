@@ -1,5 +1,5 @@
 {
-  "name": "settlements-api",
+  "name": "reglements-api",
   "version": "1.0.0",
   "description": "API pour insérer des données dans la table reglements",
   "main": "server.js",

@@ -7,21 +7,81 @@ const { authenticateApiKey } = require('../middleware/auth');
 router.use(authenticateApiKey);
 
 // Validation des données
-const validateSettlement = (data) => {
+const validateReglement = (data) => {
   const errors = [];
   
-  // MONTANT est obligatoire selon le modèle Django
+  // Champs obligatoires
   if (!data.MONTANT || isNaN(data.MONTANT)) {
     errors.push('MONTANT is required and must be a valid number');
   }
   
-  // Validation des dates si présentes
-  const dateFields = ['DATE_CONTRAT', 'DATE_DEBUT', 'DATE_FIN', 'DATE_ASSURANCE', 'DATE_REGLEMENT'];
-  dateFields.forEach(field => {
-    if (data[field] && !isValidDate(data[field])) {
-      errors.push(`${field} must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)`);
-    }
-  });
+  if (!data.CLIENT || data.CLIENT.trim() === '') {
+    errors.push('CLIENT is required and cannot be empty');
+  }
+  
+  if (!data.CONTRAT || data.CONTRAT.trim() === '') {
+    errors.push('CONTRAT is required and cannot be empty');
+  }
+  
+  if (!data.USERC || data.USERC.trim() === '') {
+    errors.push('USERC (Agent) is required and cannot be empty');
+  }
+  
+  if (!data.FAMILLE || data.FAMILLE.trim() === '') {
+    errors.push('FAMILLE is required and cannot be empty');
+  }
+  
+  if (!data.SOUSFAMILLE || data.SOUSFAMILLE.trim() === '') {
+    errors.push('SOUSFAMILLE (Sub-family) is required and cannot be empty');
+  }
+  
+  if (!data.LIBELLE || data.LIBELLE.trim() === '') {
+    errors.push('LIBELLE (Label) is required and cannot be empty');
+  }
+  
+  if (!data.MODE || data.MODE.trim() === '') {
+    errors.push('MODE (Payment Method) is required and cannot be empty');
+  }
+  
+  if (!data.TARIFAIRE || data.TARIFAIRE.trim() === '') {
+    errors.push('TARIFAIRE (Rate) is required and cannot be empty');
+  }
+  
+  // Dates obligatoires
+  if (!data.DATE_CONTRAT) {
+    errors.push('DATE_CONTRAT is required');
+  } else if (!isValidDate(data.DATE_CONTRAT)) {
+    errors.push('DATE_CONTRAT must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)');
+  }
+  
+  if (!data.DATE_DEBUT) {
+    errors.push('DATE_DEBUT is required');
+  } else if (!isValidDate(data.DATE_DEBUT)) {
+    errors.push('DATE_DEBUT must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)');
+  }
+  
+  if (!data.DATE_FIN) {
+    errors.push('DATE_FIN is required');
+  } else if (!isValidDate(data.DATE_FIN)) {
+    errors.push('DATE_FIN must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)');
+  }
+  
+  if (!data.DATE_ASSURANCE) {
+    errors.push('DATE_ASSURANCE is required');
+  } else if (!isValidDate(data.DATE_ASSURANCE)) {
+    errors.push('DATE_ASSURANCE must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)');
+  }
+  
+  if (!data.DATE_REGLEMENT) {
+    errors.push('DATE_REGLEMENT is required');
+  } else if (!isValidDate(data.DATE_REGLEMENT)) {
+    errors.push('DATE_REGLEMENT must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)');
+  }
+  
+  // id_salle est obligatoire
+  if (!data.id_salle || isNaN(data.id_salle)) {
+    errors.push('id_salle is required and must be a valid number');
+  }
   
   return errors;
 };
@@ -31,7 +91,7 @@ const isValidDate = (dateString) => {
   return date instanceof Date && !isNaN(date);
 };
 
-// GET - Récupérer tous les settlements (pour vérification)
+// GET - Récupérer tous les reglements (pour vérification)
 router.get('/', async (req, res) => {
   try {
     const limit = req.query.limit || 100;
@@ -49,15 +109,15 @@ router.get('/', async (req, res) => {
       count: result.rowCount
     });
   } catch (error) {
-    console.error('Error fetching settlements:', error);
+    console.error('Error fetching reglements:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch settlements'
+      error: 'Failed to fetch reglements'
     });
   }
 });
 
-// GET - Récupérer un settlement par ID
+// GET - Récupérer un reglement par ID
 router.get('/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -71,7 +131,7 @@ router.get('/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({
         success: false,
-        error: 'Settlement not found'
+        error: 'Reglement not found'
       });
     }
     
@@ -80,21 +140,21 @@ router.get('/:id', async (req, res) => {
       data: result.rows[0]
     });
   } catch (error) {
-    console.error('Error fetching settlement:', error);
+    console.error('Error fetching reglement:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch settlement'
+      error: 'Failed to fetch reglement'
     });
   }
 });
 
-// POST - Insérer un nouveau settlement
+// POST - Insérer un nouveau reglement
 router.post('/', async (req, res) => {
   try {
-    const settlementData = req.body;
+    const reglementData = req.body;
     
     // Validation
-    const validationErrors = validateSettlement(settlementData);
+    const validationErrors = validateReglement(reglementData);
     if (validationErrors.length > 0) {
       return res.status(400).json({
         success: false,
@@ -103,12 +163,12 @@ router.post('/', async (req, res) => {
     }
     
     // Vérifier que la salle existe si spécifiée
-    if (settlementData.id_salle) {
-      const salleCheck = await pool.query('SELECT id_salle FROM "API_salle" WHERE id_salle = $1', [settlementData.id_salle]);
+    if (reglementData.id_salle) {
+      const salleCheck = await pool.query('SELECT id_salle FROM "API_salle" WHERE id_salle = $1', [reglementData.id_salle]);
       if (salleCheck.rows.length === 0) {
         return res.status(400).json({
           success: false,
-          error: `Salle with id ${settlementData.id_salle} not found`
+          error: `Salle with id ${reglementData.id_salle} not found`
         });
       }
     }
@@ -123,83 +183,83 @@ router.post('/', async (req, res) => {
     `;
     
     const values = [
-      settlementData.id_salle || null,
-      settlementData.CONTRAT || null,
-      settlementData.CLIENT || null,
-      settlementData.DATE_CONTRAT || null,
-      settlementData.DATE_DEBUT || null,
-      settlementData.DATE_FIN || null,
-      settlementData.USERC || null,
-      settlementData.FAMILLE || null,
-      settlementData.SOUSFAMILLE || null,
-      settlementData.LIBELLE || null,
-      settlementData.DATE_ASSURANCE || null,
-      parseFloat(settlementData.MONTANT),
-      settlementData.MODE || null,
-      settlementData.TARIFAIRE || null,
-      settlementData.DATE_REGLEMENT || null
+      parseInt(reglementData.id_salle),
+      reglementData.CONTRAT.trim(),
+      reglementData.CLIENT.trim(),
+      reglementData.DATE_CONTRAT,
+      reglementData.DATE_DEBUT,
+      reglementData.DATE_FIN,
+      reglementData.USERC.trim(),
+      reglementData.FAMILLE.trim(),
+      reglementData.SOUSFAMILLE.trim(),
+      reglementData.LIBELLE.trim(),
+      reglementData.DATE_ASSURANCE,
+      parseFloat(reglementData.MONTANT),
+      reglementData.MODE.trim(),
+      reglementData.TARIFAIRE.trim(),
+      reglementData.DATE_REGLEMENT
     ];
     
     const result = await pool.query(query, values);
     
     res.status(201).json({
       success: true,
-      message: 'Settlement created successfully',
+      message: 'Reglement created successfully',
       data: result.rows[0]
     });
     
   } catch (error) {
-    console.error('Error creating settlement:', error);
+    console.error('Error creating reglement:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to create settlement',
+      error: 'Failed to create reglement',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
-// POST - Insérer plusieurs settlements en une fois
+// POST - Insérer plusieurs reglements en une fois
 router.post('/bulk', async (req, res) => {
   const client = await pool.connect();
   
   try {
-    const { settlements } = req.body;
+    const { reglements } = req.body;
     
-    if (!Array.isArray(settlements) || settlements.length === 0) {
+    if (!Array.isArray(reglements) || reglements.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'settlements array is required and must not be empty'
+        error: 'reglements array is required and must not be empty'
       });
     }
     
     await client.query('BEGIN');
     
-    const insertedSettlements = [];
+    const insertedReglements = [];
     const errors = [];
     
-    for (let i = 0; i < settlements.length; i++) {
+    for (let i = 0; i < reglements.length; i++) {
       try {
-        const settlementData = settlements[i];
+        const reglementData = reglements[i];
         
         // Validation
-        const validationErrors = validateSettlement(settlementData);
+        const validationErrors = validateReglement(reglementData);
         if (validationErrors.length > 0) {
           errors.push({
             index: i,
             errors: validationErrors,
-            data: settlementData
+            data: reglementData
           });
           continue;
         }
         
         // Vérifier que la salle existe si spécifiée
-        if (settlementData.id_salle) {
-          const salleCheck = await client.query('SELECT id_salle FROM "API_salle" WHERE id_salle = $1', [settlementData.id_salle]);
+        if (reglementData.id_salle) {
+          const salleCheck = await client.query('SELECT id_salle FROM "API_salle" WHERE id_salle = $1', [reglementData.id_salle]);
           if (salleCheck.rows.length === 0) {
             errors.push({
               index: i,
-              errors: [`Salle with id ${settlementData.id_salle} not found`],
-              data: settlementData
+              errors: [`Salle with id ${reglementData.id_salle} not found`],
+              data: reglementData
             });
             continue;
           }
@@ -215,31 +275,31 @@ router.post('/bulk', async (req, res) => {
         `;
         
         const values = [
-          settlementData.id_salle || null,
-          settlementData.CONTRAT || null,
-          settlementData.CLIENT || null,
-          settlementData.DATE_CONTRAT || null,
-          settlementData.DATE_DEBUT || null,
-          settlementData.DATE_FIN || null,
-          settlementData.USERC || null,
-          settlementData.FAMILLE || null,
-          settlementData.SOUSFAMILLE || null,
-          settlementData.LIBELLE || null,
-          settlementData.DATE_ASSURANCE || null,
-          parseFloat(settlementData.MONTANT),
-          settlementData.MODE || null,
-          settlementData.TARIFAIRE || null,
-          settlementData.DATE_REGLEMENT || null
+          parseInt(reglementData.id_salle),
+          reglementData.CONTRAT.trim(),
+          reglementData.CLIENT.trim(),
+          reglementData.DATE_CONTRAT,
+          reglementData.DATE_DEBUT,
+          reglementData.DATE_FIN,
+          reglementData.USERC.trim(),
+          reglementData.FAMILLE.trim(),
+          reglementData.SOUSFAMILLE.trim(),
+          reglementData.LIBELLE.trim(),
+          reglementData.DATE_ASSURANCE,
+          parseFloat(reglementData.MONTANT),
+          reglementData.MODE.trim(),
+          reglementData.TARIFAIRE.trim(),
+          reglementData.DATE_REGLEMENT
         ];
         
         const result = await client.query(query, values);
-        insertedSettlements.push(result.rows[0]);
+        insertedReglements.push(result.rows[0]);
         
       } catch (error) {
         errors.push({
           index: i,
           error: error.message,
-          data: settlements[i]
+          data: reglements[i]
         });
       }
     }
@@ -248,10 +308,10 @@ router.post('/bulk', async (req, res) => {
     
     res.status(201).json({
       success: true,
-      message: `Successfully inserted ${insertedSettlements.length} settlements`,
-      inserted: insertedSettlements.length,
+      message: `Successfully inserted ${insertedReglements.length} reglements`,
+      inserted: insertedReglements.length,
       errors: errors.length,
-      data: insertedSettlements,
+      data: insertedReglements,
       errorDetails: errors
     });
     
@@ -260,7 +320,7 @@ router.post('/bulk', async (req, res) => {
     console.error('Error in bulk insert:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to insert settlements',
+      error: 'Failed to insert reglements',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   } finally {

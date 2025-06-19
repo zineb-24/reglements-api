@@ -3,7 +3,7 @@ const cors = require('cors');
 const helmet = require('helmet');
 require('dotenv').config();
 
-const settlementsRoutes = require('./routes/reglements');
+const reglementsRoutes = require('./routes/reglements');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -15,15 +15,15 @@ app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Routes
-app.use('/api/settlements', settlementsRoutes);
+app.use('/api/reglements', reglementsRoutes);
 
 // Route de test
 app.get('/', (req, res) => {
   res.json({ 
-    message: 'API Settlements is running!',
+    message: 'API Reglements is running!',
     timestamp: new Date().toISOString(),
     endpoints: {
-      settlements: '/api/settlements'
+      reglements: '/api/reglements'
     }
   });
 });
