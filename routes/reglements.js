@@ -328,4 +328,203 @@ router.post('/bulk', async (req, res) => {
   }
 });
 
+// PUT - Modifier un reglement
+router.put('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const reglementData = req.body;
+    
+    // Vérifier que le reglement existe
+    const existingReglement = await pool.query('SELECT * FROM "API_user_reglement" WHERE "ID_reglement" = $1', [id]);
+    if (existingReglement.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Reglement not found'
+      });
+    }
+    
+    // Validation
+    const validationErrors = validateReglement(reglementData);
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors: validationErrors
+      });
+    }
+    
+    // Vérifier que la salle existe si spécifiée
+    if (reglementData.id_salle) {
+      const salleCheck = await pool.query('SELECT id_salle FROM "API_salle" WHERE id_salle = $1', [reglementData.id_salle]);
+      if (salleCheck.rows.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: `Salle with id ${reglementData.id_salle} not found`
+        });
+      }
+    }
+    
+    const query = `
+      UPDATE "API_user_reglement" SET
+        "id_salle_id" = $1,
+        "CONTRAT" = $2,
+        "CLIENT" = $3,
+        "DATE_CONTRAT" = $4,
+        "DATE_DEBUT" = $5,
+        "DATE_FIN" = $6,
+        "USERC" = $7,
+        "FAMILLE" = $8,
+        "SOUSFAMILLE" = $9,
+        "LIBELLE" = $10,
+        "DATE_ASSURANCE" = $11,
+        "MONTANT" = $12,
+        "MODE" = $13,
+        "TARIFAIRE" = $14,
+        "DATE_REGLEMENT" = $15
+      WHERE "ID_reglement" = $16
+      RETURNING *
+    `;
+    
+    const values = [
+      parseInt(reglementData.id_salle),
+      reglementData.CONTRAT.trim(),
+      reglementData.CLIENT.trim(),
+      reglementData.DATE_CONTRAT,
+      reglementData.DATE_DEBUT,
+      reglementData.DATE_FIN,
+      reglementData.USERC.trim(),
+      reglementData.FAMILLE.trim(),
+      reglementData.SOUSFAMILLE.trim(),
+      reglementData.LIBELLE.trim(),
+      reglementData.DATE_ASSURANCE,
+      parseFloat(reglementData.MONTANT),
+      reglementData.MODE.trim(),
+      reglementData.TARIFAIRE.trim(),
+      reglementData.DATE_REGLEMENT,
+      id
+    ];
+    
+    const result = await pool.query(query, values);
+    
+    res.json({
+      success: true,
+      message: 'Reglement updated successfully',
+      data: result.rows[0],
+      previous: existingReglement.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('Error updating reglement:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update reglement',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// DELETE - Supprimer un reglement
+router.delete('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Vérifier que le reglement existe avant de le supprimer
+    const existingReglement = await pool.query('SELECT * FROM "API_user_reglement" WHERE "ID_reglement" = $1', [id]);
+    if (existingReglement.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Reglement not found'
+      });
+    }
+    
+    const result = await pool.query('DELETE FROM "API_user_reglement" WHERE "ID_reglement" = $1 RETURNING *', [id]);
+    
+    res.json({
+      success: true,
+      message: 'Reglement deleted successfully',
+      deleted: result.rows[0]
+    });
+    
+  } catch (error) {
+    console.error('Error deleting reglement:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete reglement',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// DELETE - Supprimer plusieurs reglements en une fois
+router.delete('/bulk/delete', async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { ids } = req.body;
+    
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'ids array is required and must not be empty'
+      });
+    }
+    
+    // Valider que tous les IDs sont des nombres
+    const invalidIds = ids.filter(id => isNaN(parseInt(id)));
+    if (invalidIds.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'All IDs must be valid numbers',
+        invalidIds
+      });
+    }
+    
+    await client.query('BEGIN');
+    
+    const deletedReglements = [];
+    const notFoundIds = [];
+    
+    for (const id of ids) {
+      try {
+        // Vérifier que le reglement existe
+        const existingReglement = await client.query('SELECT * FROM "API_user_reglement" WHERE "ID_reglement" = $1', [id]);
+        
+        if (existingReglement.rows.length === 0) {
+          notFoundIds.push(id);
+          continue;
+        }
+        
+        // Supprimer le reglement
+        const result = await client.query('DELETE FROM "API_user_reglement" WHERE "ID_reglement" = $1 RETURNING *', [id]);
+        deletedReglements.push(result.rows[0]);
+        
+      } catch (error) {
+        console.error(`Error deleting reglement ${id}:`, error);
+        notFoundIds.push(id);
+      }
+    }
+    
+    await client.query('COMMIT');
+    
+    res.json({
+      success: true,
+      message: `Successfully deleted ${deletedReglements.length} reglements`,
+      deleted: deletedReglements.length,
+      notFound: notFoundIds.length,
+      deletedReglements,
+      notFoundIds
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error in bulk delete:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to delete reglements',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  } finally {
+    client.release();
+  }
+});
+
 module.exports = router;
