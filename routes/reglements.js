@@ -328,6 +328,370 @@ router.post('/bulk', async (req, res) => {
   }
 });
 
+// PATCH - Modifier partiellement un reglement (un ou plusieurs champs)
+router.patch('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updateData = req.body;
+    
+    // Vérifier que le reglement existe
+    const existingReglement = await pool.query('SELECT * FROM "API_user_reglement" WHERE "ID_reglement" = $1', [id]);
+    if (existingReglement.rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Reglement not found'
+      });
+    }
+    
+    // Vérifier qu'il y a au moins un champ à modifier
+    if (Object.keys(updateData).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'At least one field must be provided for update'
+      });
+    }
+    
+    // Liste des champs autorisés à être modifiés
+    const allowedFields = [
+      'id_salle', 'CONTRAT', 'CLIENT', 'DATE_CONTRAT', 'DATE_DEBUT', 
+      'DATE_FIN', 'USERC', 'FAMILLE', 'SOUSFAMILLE', 'LIBELLE', 
+      'DATE_ASSURANCE', 'MONTANT', 'MODE', 'TARIFAIRE', 'DATE_REGLEMENT'
+    ];
+    
+    // Filtrer les champs autorisés et valider
+    const fieldsToUpdate = {};
+    const validationErrors = [];
+    
+    for (const [key, value] of Object.entries(updateData)) {
+      if (!allowedFields.includes(key)) {
+        validationErrors.push(`Field '${key}' is not allowed to be updated`);
+        continue;
+      }
+      
+      // Validation spécifique par champ
+      switch (key) {
+        case 'MONTANT':
+          if (value !== null && value !== undefined && isNaN(value)) {
+            validationErrors.push('MONTANT must be a valid number');
+          } else if (value !== null && value !== undefined) {
+            fieldsToUpdate[key] = parseFloat(value);
+          }
+          break;
+          
+        case 'id_salle':
+          if (value !== null && value !== undefined && isNaN(value)) {
+            validationErrors.push('id_salle must be a valid number');
+          } else if (value !== null && value !== undefined) {
+            // Vérifier que la salle existe
+            const salleCheck = await pool.query('SELECT id_salle FROM "API_salle" WHERE id_salle = $1', [value]);
+            if (salleCheck.rows.length === 0) {
+              validationErrors.push(`Salle with id ${value} not found`);
+            } else {
+              fieldsToUpdate[key] = parseInt(value);
+            }
+          }
+          break;
+          
+        case 'DATE_CONTRAT':
+        case 'DATE_DEBUT':
+        case 'DATE_FIN':
+        case 'DATE_ASSURANCE':
+        case 'DATE_REGLEMENT':
+          if (value !== null && value !== undefined && !isValidDate(value)) {
+            validationErrors.push(`${key} must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)`);
+          } else {
+            fieldsToUpdate[key] = value;
+          }
+          break;
+          
+        case 'CONTRAT':
+        case 'CLIENT':
+        case 'USERC':
+        case 'FAMILLE':
+        case 'SOUSFAMILLE':
+        case 'LIBELLE':
+        case 'MODE':
+        case 'TARIFAIRE':
+          if (value !== null && value !== undefined) {
+            const trimmedValue = value.toString().trim();
+            if (trimmedValue === '') {
+              validationErrors.push(`${key} cannot be empty`);
+            } else {
+              fieldsToUpdate[key] = trimmedValue;
+            }
+          }
+          break;
+          
+        default:
+          fieldsToUpdate[key] = value;
+      }
+    }
+    
+    // Retourner les erreurs de validation si il y en a
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors: validationErrors
+      });
+    }
+    
+    // Vérifier qu'il reste des champs à modifier après validation
+    if (Object.keys(fieldsToUpdate).length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'No valid fields provided for update'
+      });
+    }
+    
+    // Construire la requête UPDATE dynamiquement
+    const setParts = [];
+    const values = [];
+    let paramIndex = 1;
+    
+    for (const [key, value] of Object.entries(fieldsToUpdate)) {
+      // Mapper les noms de champs aux colonnes de la base
+      const columnName = key === 'id_salle' ? 'id_salle_id' : key;
+      setParts.push(`"${columnName}" = $${paramIndex}`);
+      values.push(value);
+      paramIndex++;
+    }
+    
+    // Ajouter l'ID pour la clause WHERE
+    values.push(id);
+    
+    const query = `
+      UPDATE "API_user_reglement" 
+      SET ${setParts.join(', ')}
+      WHERE "ID_reglement" = $${paramIndex}
+      RETURNING *
+    `;
+    
+    const result = await pool.query(query, values);
+    
+    res.json({
+      success: true,
+      message: 'Reglement updated successfully',
+      data: result.rows[0],
+      previous: existingReglement.rows[0],
+      updatedFields: Object.keys(fieldsToUpdate)
+    });
+    
+  } catch (error) {
+    console.error('Error updating reglement:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update reglement',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  }
+});
+
+// PATCH - Modifier partiellement plusieurs reglements en une fois
+router.patch('/bulk/update', async (req, res) => {
+  const client = await pool.connect();
+  
+  try {
+    const { updates } = req.body;
+    
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'updates array is required and must not be empty'
+      });
+    }
+    
+    // Vérifier que chaque update a un ID
+    for (let i = 0; i < updates.length; i++) {
+      if (!updates[i].id || isNaN(parseInt(updates[i].id))) {
+        return res.status(400).json({
+          success: false,
+          error: `Update at index ${i} must have a valid numeric id`
+        });
+      }
+    }
+    
+    await client.query('BEGIN');
+    
+    const updatedReglements = [];
+    const errors = [];
+    
+    const allowedFields = [
+      'id_salle', 'CONTRAT', 'CLIENT', 'DATE_CONTRAT', 'DATE_DEBUT', 
+      'DATE_FIN', 'USERC', 'FAMILLE', 'SOUSFAMILLE', 'LIBELLE', 
+      'DATE_ASSURANCE', 'MONTANT', 'MODE', 'TARIFAIRE', 'DATE_REGLEMENT'
+    ];
+    
+    for (let i = 0; i < updates.length; i++) {
+      try {
+        const { id, ...updateData } = updates[i];
+        
+        // Vérifier que le reglement existe
+        const existingReglement = await client.query('SELECT * FROM "API_user_reglement" WHERE "ID_reglement" = $1', [id]);
+        if (existingReglement.rows.length === 0) {
+          errors.push({
+            index: i,
+            id: id,
+            error: 'Reglement not found'
+          });
+          continue;
+        }
+        
+        // Vérifier qu'il y a au moins un champ à modifier
+        if (Object.keys(updateData).length === 0) {
+          errors.push({
+            index: i,
+            id: id,
+            error: 'At least one field must be provided for update'
+          });
+          continue;
+        }
+        
+        // Filtrer et valider les champs
+        const fieldsToUpdate = {};
+        const validationErrors = [];
+        
+        for (const [key, value] of Object.entries(updateData)) {
+          if (!allowedFields.includes(key)) {
+            validationErrors.push(`Field '${key}' is not allowed to be updated`);
+            continue;
+          }
+          
+          // Validation spécifique par champ (même logique que la route PATCH simple)
+          switch (key) {
+            case 'MONTANT':
+              if (value !== null && value !== undefined && isNaN(value)) {
+                validationErrors.push('MONTANT must be a valid number');
+              } else if (value !== null && value !== undefined) {
+                fieldsToUpdate[key] = parseFloat(value);
+              }
+              break;
+              
+            case 'id_salle':
+              if (value !== null && value !== undefined && isNaN(value)) {
+                validationErrors.push('id_salle must be a valid number');
+              } else if (value !== null && value !== undefined) {
+                const salleCheck = await client.query('SELECT id_salle FROM "API_salle" WHERE id_salle = $1', [value]);
+                if (salleCheck.rows.length === 0) {
+                  validationErrors.push(`Salle with id ${value} not found`);
+                } else {
+                  fieldsToUpdate[key] = parseInt(value);
+                }
+              }
+              break;
+              
+            case 'DATE_CONTRAT':
+            case 'DATE_DEBUT':
+            case 'DATE_FIN':
+            case 'DATE_ASSURANCE':
+            case 'DATE_REGLEMENT':
+              if (value !== null && value !== undefined && !isValidDate(value)) {
+                validationErrors.push(`${key} must be a valid date (ISO format: YYYY-MM-DDTHH:mm:ssZ)`);
+              } else {
+                fieldsToUpdate[key] = value;
+              }
+              break;
+              
+            case 'CONTRAT':
+            case 'CLIENT':
+            case 'USERC':
+            case 'FAMILLE':
+            case 'SOUSFAMILLE':
+            case 'LIBELLE':
+            case 'MODE':
+            case 'TARIFAIRE':
+              if (value !== null && value !== undefined) {
+                const trimmedValue = value.toString().trim();
+                if (trimmedValue === '') {
+                  validationErrors.push(`${key} cannot be empty`);
+                } else {
+                  fieldsToUpdate[key] = trimmedValue;
+                }
+              }
+              break;
+              
+            default:
+              fieldsToUpdate[key] = value;
+          }
+        }
+        
+        if (validationErrors.length > 0) {
+          errors.push({
+            index: i,
+            id: id,
+            errors: validationErrors
+          });
+          continue;
+        }
+        
+        if (Object.keys(fieldsToUpdate).length === 0) {
+          errors.push({
+            index: i,
+            id: id,
+            error: 'No valid fields provided for update'
+          });
+          continue;
+        }
+        
+        // Construire et exécuter la requête UPDATE
+        const setParts = [];
+        const values = [];
+        let paramIndex = 1;
+        
+        for (const [key, value] of Object.entries(fieldsToUpdate)) {
+          const columnName = key === 'id_salle' ? 'id_salle_id' : key;
+          setParts.push(`"${columnName}" = $${paramIndex}`);
+          values.push(value);
+          paramIndex++;
+        }
+        
+        values.push(id);
+        
+        const query = `
+          UPDATE "API_user_reglement" 
+          SET ${setParts.join(', ')}
+          WHERE "ID_reglement" = $${paramIndex}
+          RETURNING *
+        `;
+        
+        const result = await client.query(query, values);
+        updatedReglements.push({
+          ...result.rows[0],
+          updatedFields: Object.keys(fieldsToUpdate)
+        });
+        
+      } catch (error) {
+        errors.push({
+          index: i,
+          id: updates[i].id,
+          error: error.message
+        });
+      }
+    }
+    
+    await client.query('COMMIT');
+    
+    res.json({
+      success: true,
+      message: `Successfully updated ${updatedReglements.length} reglements`,
+      updated: updatedReglements.length,
+      errors: errors.length,
+      data: updatedReglements,
+      errorDetails: errors
+    });
+    
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error in bulk patch:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to update reglements',
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+  } finally {
+    client.release();
+  }
+});
+
 // PUT - Modifier un reglement
 router.put('/:id', async (req, res) => {
   try {
